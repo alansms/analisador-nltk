@@ -1,151 +1,104 @@
 import streamlit as st
-import re
-import random
 import pandas as pd
-import io
+import nltk
+import string
+import re
+from nltk.classify import NaiveBayesClassifier
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+import random
+import matplotlib.pyplot as plt
+from collections import Counter
 
-# Dicionário de palavras positivas, negativas e emoções específicas
-palavras_positivas = {"bom", "ótimo", "excelente", "maravilhoso", "feliz", "alegria", "positivo", "sucesso", "incrível",
-                      "fantástico", "adorável"}
-palavras_negativas = {"ruim", "péssimo", "horrível", "triste", "fracasso", "negativo", "chato", "desastroso",
-                      "deprimente", "lamentável"}
-palavras_raiva = {"ódio", "raiva", "furioso", "irritado", "revoltado", "explosivo", "agressivo", "furibundo"}
-palavras_medo = {"medo", "assustado", "pavor", "ameaça", "desesperado"}
+# Downloads necessários
+nltk.download('punkt')
+nltk.download('stopwords')
 
-# Mensagens motivacionais para sentimentos negativos
-mensagens_apoio = [
-    "💙 Respire fundo. Você não está sozinho. 💙",
-    "🌿 Tente ouvir uma música relaxante e cuidar de você. 🌿",
-    "🌟 Lembre-se: dias difíceis passam. Você é mais forte do que imagina. 🌟"
-]
+# Variáveis globais de vocabulário
+positivas = {"ótimo", "excelente", "adorei", "bom", "maravilhoso", "superou", "perfeito", "gostei", "satisfatória", "qualidade", "resolução", "bonita"}
+negativas = {"ruim", "horrível", "péssimo", "não gostei", "esperava mais", "lento", "defeito", "problema"}
+neutras = {"regular", "ok", "aceitável", "mediano", "normal", "cumpre"}
 
-# Configuração de cores para realçar emoções
-cores = {
-    "Muito Positivo": "#DFF6DD",  # Verde claro
-    "Positivo": "#C3E6CB",
-    "Neutro": "#FFF3CD",  # Amarelo claro
-    "Negativo": "#F8D7DA",  # Vermelho claro
-    "Muito Negativo": "#F5C6CB",
-    "Raiva": "#FF5733",  # Laranja escuro
-    "Medo": "#6A5ACD"  # Azul escuro
-}
+# Funções auxiliares para pré-processamento
+def preprocess(text):
+    tokens = word_tokenize(text.lower())
+    stop_words = set(stopwords.words('portuguese'))
+    tokens = [t for t in tokens if t not in string.punctuation and t not in stop_words]
+    return tokens
 
-# Função de análise de sentimento
+def build_features(tokens):
+    return {word: True for word in tokens}
 
-def analisar_sentimento(frase):
-    if not frase.strip():
-        return "Por favor, insira uma frase válida.", "🧐"
-
-    frase = re.sub(r'[^\w\s]', '', frase.lower())
-    palavras = frase.split()
-
-    contagem_positiva = sum(1 for palavra in palavras if palavra in palavras_positivas)
-    contagem_negativa = sum(1 for palavra in palavras if palavra in palavras_negativas)
-    contagem_raiva = sum(1 for palavra in palavras if palavra in palavras_raiva)
-    contagem_medo = sum(1 for palavra in palavras if palavra in palavras_medo)
-
-    if contagem_raiva > 0:
-        return "Raiva", "🔥"
-    elif contagem_medo > 0:
-        return "Medo", "😨"
-    elif contagem_positiva >= 3:
-        return "Muito Positivo", "😍"
-    elif contagem_positiva > contagem_negativa:
-        return "Positivo", "🙂"
-    elif contagem_negativa >= 3:
-        return "Muito Negativo", "😢"
-    elif contagem_negativa > contagem_positiva:
-        return "Negativo", "😞"
+# Função de rotulagem automática
+def rotular_automaticamente(texto):
+    texto_limpo = re.sub(r'[^\w\s]', '', texto.lower())
+    if any(p in texto_limpo for p in positivas):
+        return "positivo"
+    elif any(n in texto_limpo for n in negativas):
+        return "negativo"
+    elif any(nu in texto_limpo for nu in neutras):
+        return "neutro"
     else:
-        return "Neutro", "😐"
+        return "neutro"
 
-# Interface Web com Streamlit
-st.set_page_config(page_title="Sentimento AI - Análise de Reviews", page_icon="📱", layout="wide")
-
-st.markdown("""
-    <style>
-        .big-title {
-            font-size: 42px;
-            text-align: center;
-            color: #4A90E2;
-        }
-        .sub-title {
-            font-size: 22px;
-            text-align: center;
-            color: #666;
-        }
-        .result-box {
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
-            font-size: 24px;
-            font-weight: bold;
-            width: 60%;
-            margin: auto;
-            box-shadow: 2px 2px 10px rgba(0,0,0,0.2);
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown("<h1 class='big-title'>📱 Sentimento AI: Análise de Reviews</h1>", unsafe_allow_html=True)
-st.markdown("<p class='sub-title'>Visualize os sentimentos atribuídos às avaliações de smartphones</p>", unsafe_allow_html=True)
-
-# Carregamento do CSV
-uploaded_file = st.sidebar.file_uploader("📄 Faça upload do arquivo de reviews (CSV)", type="csv")
-
-if uploaded_file:
+# Carrega e prepara o dataset rotulado automaticamente
+@st.cache_data
+def treinar_modelo():
     try:
-        stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
-        df = pd.read_csv(stringio, sep=';')
-    except UnicodeDecodeError:
-        stringio = io.StringIO(uploaded_file.getvalue().decode("latin1"))
-        df = pd.read_csv(stringio, sep=';')
-    except Exception as e:
-        st.error(f"Erro ao processar o CSV: {e}")
-        st.stop()
+        df = pd.read_csv("/mnt/data/reviews_smartphone.csv", sep=';', encoding='utf-8')
+    except:
+        df = pd.read_csv("/mnt/data/reviews_smartphone.csv", sep=';', encoding='latin1')
 
-    st.success("Arquivo carregado com sucesso!")
+    df['sentimento'] = df['Reviews'].apply(rotular_automaticamente)
+    dataset = [(build_features(preprocess(row['Reviews'])), row['sentimento']) for _, row in df.iterrows()]
+    random.shuffle(dataset)
+    split = int(0.8 * len(dataset))
+    train_set = dataset[:split]
+    return NaiveBayesClassifier.train(train_set)
 
-    # Normaliza os nomes das colunas
-    df.columns = [col.strip().lower() for col in df.columns]
+# Interface Streamlit
+st.set_page_config(page_title="Sentimento AI - CSV & ML", layout="wide")
+st.title("📊 Sentimento AI: Análise de Reviews")
+st.markdown("Classificador de sentimentos com aprendizado de máquina e visualização de estatísticas.")
 
-    # Tenta renomear colunas parecidas com 'produto' e 'review'
-    colunas_renomeadas = {}
-    for col in df.columns:
-        if 'produto' in col and col != 'produto':
-            colunas_renomeadas[col] = 'produto'
-        if 'review' in col and col != 'review':
-            colunas_renomeadas[col] = 'review'
-    df.rename(columns=colunas_renomeadas, inplace=True)
+modelo = treinar_modelo()
 
-    st.write("🔍 Colunas detectadas:", df.columns.tolist())
+# Carregar CSV e mostrar gráfico com base no conteúdo
+try:
+    df_estat = pd.read_csv("/mnt/data/reviews_smartphone.csv", sep=';', encoding='utf-8')
+except:
+    df_estat = pd.read_csv("/mnt/data/reviews_smartphone.csv", sep=';', encoding='latin1')
 
-    # Se a coluna 'produto' estiver ausente, adiciona uma com valor padrão
-    if 'produto' not in df.columns:
-        df['produto'] = 'Produto Genérico'
-        st.warning("Coluna 'produto' não encontrada. Adicionada automaticamente com valor padrão.")
+if 'Reviews' in df_estat.columns:
+    sentimentos_csv = df_estat['Reviews'].dropna().apply(rotular_automaticamente)
+    contagem = Counter(sentimentos_csv)
 
-    if "produto" in df.columns and "review" in df.columns:
-        produto_selecionado = st.selectbox("📱 Selecione um produto:", df["produto"].unique())
-        reviews_produto = df[df["produto"] == produto_selecionado]
+    if contagem:
+        st.sidebar.header("📊 Estatísticas no Dataset CSV")
+        labels, values = zip(*contagem.items())
+        fig, ax = plt.subplots()
+        cores = ["#28a745" if s == "positivo" else "#dc3545" if s == "negativo" else "#ffc107" for s in labels]
+        ax.bar(labels, values, color=cores)
+        ax.set_title("Distribuição de Sentimentos")
+        st.sidebar.pyplot(fig)
 
-        st.markdown(f"### 📝 Avaliações para: `{produto_selecionado}`")
+    produto_selecionado = st.selectbox("📱 Selecione um produto:", df_estat["produto"].unique() if "produto" in df_estat.columns else ["Produto Genérico"])
+    if "produto" not in df_estat.columns:
+        df_estat["produto"] = "Produto Genérico"
 
-        for i, row in reviews_produto.iterrows():
-            texto = row['review']
-            sentimento, emoji = analisar_sentimento(texto)
-            cor = cores.get(sentimento, "#ffffff")
+    reviews = df_estat[df_estat["produto"] == produto_selecionado]
+    st.markdown(f"### ✏️ Avaliações para: `{produto_selecionado}`")
 
-            st.markdown(f"""
-            <div class='result-box' style='background-color: {cor};
-                 color: {'#000' if sentimento in ['Muito Positivo', 'Neutro'] else '#fff'};'>
-                {emoji} {sentimento}<br><span style='font-size: 16px; font-weight: normal;'>{texto}</span>
-            </div><br>
-            """, unsafe_allow_html=True)
+    for _, row in reviews.iterrows():
+        frase = row['Reviews']
+        sentimento, emoji = rotular_automaticamente(frase), {"positivo": "🙂", "negativo": "😞", "neutro": "😐"}.get(rotular_automaticamente(frase), "❓")
+        cor = "#DFF6DD" if sentimento == "positivo" else "#F8D7DA" if sentimento == "negativo" else "#FFF3CD"
 
-            if "Negativo" in sentimento or sentimento in ["Raiva", "Medo"]:
-                st.info(random.choice(mensagens_apoio))
-    else:
-        st.error("⚠️ O CSV precisa conter as colunas 'produto' e 'review'.")
+        st.markdown(f"""
+            <div style='padding: 12px; border-radius: 8px; background-color: {cor}; margin-bottom: 10px;'>
+                <strong style='font-size: 18px;'>{emoji} {sentimento.capitalize()}</strong><br>
+                <span style='font-size: 15px;'>{frase}</span>
+            </div>
+        """, unsafe_allow_html=True)
 else:
-    st.info("👈 Faça upload de um arquivo CSV contendo avaliações para visualizar os sentimentos.")
+    st.error("❗ O CSV deve conter ao menos a coluna 'Reviews'.")
