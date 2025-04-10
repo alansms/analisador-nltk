@@ -10,14 +10,14 @@ import random
 import matplotlib.pyplot as plt
 from collections import Counter
 
-# Downloads necessários
+# Downloads necessários (só executa na primeira vez)
 nltk.download('punkt')
 nltk.download('stopwords')
 
-# Variáveis globais de vocabulário
+# Vocabulário de sentimentos
 positivas = {"ótimo", "excelente", "adorei", "bom", "maravilhoso", "superou", "perfeito", "gostei", "satisfatória", "qualidade", "resolução", "bonita"}
-negativas = {"ruim", "horrível", "péssimo", "não gostei", "esperava mais", "lento", "defeito", "problema"}
-neutras = {"regular", "ok", "aceitável", "mediano", "normal", "cumpre"}
+negativas  = {"ruim", "horrível", "péssimo", "não gostei", "esperava mais", "lento", "defeito", "problema"}
+neutras    = {"regular", "ok", "aceitável", "mediano", "normal", "cumpre"}
 
 # Funções auxiliares para pré-processamento
 def preprocess(text):
@@ -41,14 +41,9 @@ def rotular_automaticamente(texto):
     else:
         return "neutro"
 
-# Carrega e prepara o dataset rotulado automaticamente
+# Carrega e prepara o dataset e treina o modelo
 @st.cache_data
-def treinar_modelo():
-    try:
-        df = pd.read_csv("/mnt/data/reviews_smartphone.csv", sep=';', encoding='utf-8')
-    except:
-        df = pd.read_csv("/mnt/data/reviews_smartphone.csv", sep=';', encoding='latin1')
-
+def treinar_modelo(df):
     df['sentimento'] = df['Reviews'].apply(rotular_automaticamente)
     dataset = [(build_features(preprocess(row['Reviews'])), row['sentimento']) for _, row in df.iterrows()]
     random.shuffle(dataset)
@@ -61,18 +56,27 @@ st.set_page_config(page_title="Sentimento AI - CSV & ML", layout="wide")
 st.title("📊 Sentimento AI: Análise de Reviews")
 st.markdown("Classificador de sentimentos com aprendizado de máquina e visualização de estatísticas.")
 
-modelo = treinar_modelo()
+# Carregar o CSV via file uploader
+uploaded_file = st.file_uploader("Carregue o arquivo CSV", type=["csv"])
+if uploaded_file is not None:
+    try:
+        df = pd.read_csv(uploaded_file, sep=';', encoding='utf-8')
+    except:
+        df = pd.read_csv(uploaded_file, sep=';', encoding='latin1')
+    
+    # Verifica se a coluna 'Reviews' existe
+    if 'Reviews' not in df.columns:
+        st.error("O CSV deve conter a coluna 'Reviews'.")
+        st.stop()
 
-# Carregar CSV e mostrar gráfico com base no conteúdo
-try:
-    df_estat = pd.read_csv("/mnt/data/reviews_smartphone.csv", sep=';', encoding='utf-8')
-except:
-    df_estat = pd.read_csv("/mnt/data/reviews_smartphone.csv", sep=';', encoding='latin1')
-
-if 'Reviews' in df_estat.columns:
-    sentimentos_csv = df_estat['Reviews'].dropna().apply(rotular_automaticamente)
+    # Treinar o modelo com os dados carregados
+    modelo = treinar_modelo(df)
+    
+    # Calcular as estatísticas de sentimento
+    sentimentos_csv = df['Reviews'].dropna().apply(rotular_automaticamente)
     contagem = Counter(sentimentos_csv)
 
+    # Exibe o gráfico de estatísticas na sidebar
     if contagem:
         st.sidebar.header("📊 Estatísticas no Dataset CSV")
         labels, values = zip(*contagem.items())
@@ -82,18 +86,21 @@ if 'Reviews' in df_estat.columns:
         ax.set_title("Distribuição de Sentimentos")
         st.sidebar.pyplot(fig)
 
-    produto_selecionado = st.selectbox("📱 Selecione um produto:", df_estat["produto"].unique() if "produto" in df_estat.columns else ["Produto Genérico"])
-    if "produto" not in df_estat.columns:
-        df_estat["produto"] = "Produto Genérico"
+    # Se existir a coluna 'produto', permite seleção; caso contrário, usa Produto Genérico
+    if "produto" in df.columns:
+        produto_selecionado = st.selectbox("📱 Selecione um produto:", df["produto"].unique())
+        df_estat = df[df["produto"] == produto_selecionado]
+    else:
+        df["produto"] = "Produto Genérico"
+        produto_selecionado = "Produto Genérico"
+        df_estat = df
 
-    reviews = df_estat[df_estat["produto"] == produto_selecionado]
     st.markdown(f"### ✏️ Avaliações para: `{produto_selecionado}`")
-
-    for _, row in reviews.iterrows():
+    for _, row in df_estat.iterrows():
         frase = row['Reviews']
-        sentimento, emoji = rotular_automaticamente(frase), {"positivo": "🙂", "negativo": "😞", "neutro": "😐"}.get(rotular_automaticamente(frase), "❓")
+        sentimento = rotular_automaticamente(frase)
+        emoji = {"positivo": "🙂", "negativo": "😞", "neutro": "😐"}.get(sentimento, "❓")
         cor = "#DFF6DD" if sentimento == "positivo" else "#F8D7DA" if sentimento == "negativo" else "#FFF3CD"
-
         st.markdown(f"""
             <div style='padding: 12px; border-radius: 8px; background-color: {cor}; margin-bottom: 10px;'>
                 <strong style='font-size: 18px;'>{emoji} {sentimento.capitalize()}</strong><br>
@@ -101,4 +108,4 @@ if 'Reviews' in df_estat.columns:
             </div>
         """, unsafe_allow_html=True)
 else:
-    st.error("❗ O CSV deve conter ao menos a coluna 'Reviews'.")
+    st.info("Carregue o arquivo CSV para prosseguir.")
